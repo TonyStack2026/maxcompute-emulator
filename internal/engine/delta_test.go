@@ -291,3 +291,57 @@ func TestDeltaTableDropsAndCanBeRecreated(t *testing.T) {
 		t.Fatalf("after recreate: version=%d rows=%d err=%v", version, len(rows.Rows), err)
 	}
 }
+
+// TestDeltaDropPartitionPublishesDeleteEvents closes the last hole in the write-path
+// audit: ALTER TABLE DROP PARTITION removes rows, so a CDC consumer has to see them go.
+// The rows themselves are gone from the live table, which is why the assertion is made on
+// the event history (read across all partitions) rather than on the dropped partition.
+func TestDeltaDropPartitionPublishesDeleteEvents(t *testing.T) {
+	ctx := context.Background()
+	e := openTestEngine(t)
+	ddl := "create table dp(id bigint, primary key(id)) partitioned by (ds string) tblproperties('transactional'='true')"
+	if _, err := e.Execute(ctx, "p", "default", ddl); err != nil {
+		t.Fatal(err)
+	}
+	tbl, err := e.Table(ctx, "p", "default", "dp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(tbl.Columns)
+	for _, part := range []string{"1", "2"} {
+		if err := e.Write(ctx, "p", "default", "dp", map[string]string{"ds": part},
+			[][]any{{int64(1)}}, false, []byte{'U'}); err != nil {
+			t.Fatalf("write partition %s: %v", part, err)
+		}
+	}
+	before, boundBefore, err := e.DeltaRead(ctx, "p", "default", "dp", nil, 0, -1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Rows) != 2 {
+		t.Fatalf("events before the drop=%+v want two inserts", before.Rows)
+	}
+	if _, err = e.Execute(ctx, "p", "default", "alter table dp drop partition(ds='1')"); err != nil {
+		t.Fatal(err)
+	}
+	after, boundAfter, err := e.DeltaRead(ctx, "p", "default", "dp", nil, 0, -1, true)
+	if err != nil {
+		t.Fatalf("incremental read after dropping a partition: %v", err)
+	}
+	if boundAfter <= boundBefore {
+		t.Fatalf("dropping a partition did not advance the bound: %d -> %d", boundBefore, boundAfter)
+	}
+	deletes := 0
+	for _, row := range after.Rows[len(before.Rows):] {
+		if eventOp(row, n) == 4 {
+			deletes++
+		}
+	}
+	if deletes != 1 {
+		t.Fatalf("drop partition published %d delete events, want 1: %+v", deletes, after.Rows[len(before.Rows):])
+	}
+	// The surviving partition is still readable through the same window.
+	if _, _, err := e.DeltaRead(ctx, "p", "default", "dp", []map[string]string{{"ds": "2"}}, 0, -1, true); err != nil {
+		t.Fatalf("read the surviving partition: %v", err)
+	}
+}

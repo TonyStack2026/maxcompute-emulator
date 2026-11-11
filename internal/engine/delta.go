@@ -183,6 +183,31 @@ func readStoredRow(ctx context.Context, tx *sql.Tx, t Table, where string, args 
 	return v, rows.Err()
 }
 
+// dropStageHiddenColumns removes the version columns a star projection picked up from a
+// delta table. They are engine-private: the INSERT path compares and projects the stage
+// against the user-visible width, and a copied row that kept its source version would
+// arrive in the target's history at a version that is already taken.
+func dropStageHiddenColumns(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "SELECT * FROM __emulator_stage LIMIT 0")
+	if err != nil {
+		return err
+	}
+	names, err := rows.Columns()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		if !IsHiddenColumn(n) {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, "ALTER TABLE __emulator_stage DROP COLUMN "+Quote(n)); err != nil {
+			return fmt.Errorf("drop %s from the INSERT staging table: %w", n, err)
+		}
+	}
+	return nil
+}
+
 // DeltaBound is the newest version the table has reached across the event log and the
 // live rows. Rollbacks leave holes in the sequence and deletes remove the newest live
 // row, so neither the sequence value nor the data table alone is a monotone bound.

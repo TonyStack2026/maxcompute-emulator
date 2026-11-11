@@ -458,6 +458,12 @@ func (e *Engine) exec(ctx context.Context, tx *sql.Tx, ns, project string, ts []
 			return none, err
 		}
 		defer tx.ExecContext(ctx, "DROP TABLE IF EXISTS __emulator_stage")
+		// A source that reads a delta table would otherwise stage its hidden version columns
+		// too: the width check below compares physical stage columns against the user
+		// columns, and a star INSERT would copy a source row's version into the target.
+		if err = dropStageHiddenColumns(ctx, tx); err != nil {
+			return none, err
+		}
 		extra := []string{}
 		args := []any{}
 		where := []string{}

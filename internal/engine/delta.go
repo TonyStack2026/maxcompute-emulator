@@ -240,8 +240,9 @@ func deltaColumns(t Table) []Column {
 }
 
 // DeltaRead returns the events a delta table published in (start, end]. A negative
-// end means "up to whatever the table has reached now"; the returned version is the
-// end of the window the caller consumed, which is what readers advance to. events
+// end means "up to whatever the table has reached now", and an end above the committed
+// bound is capped to it; the returned version is the end of the window the caller
+// actually consumed, which is what readers advance to. events
 // adds the delete/update-before images, so append mode sees inserted rows only.
 func (e *Engine) DeltaRead(ctx context.Context, p, s, name string, partitions []map[string]string, start, end int64, events bool) (Result, int64, error) {
 	e.mu.Lock()
@@ -266,6 +267,14 @@ func (e *Engine) DeltaRead(ctx context.Context, p, s, name string, partitions []
 		start = 0
 	}
 	if end < 0 {
+		end = bound
+	}
+	// A window reaching past what is committed cannot be consumed either: the caller keeps
+	// the returned version as its cursor, so reporting the requested end would point it at
+	// versions that were never written and put everything up to the bound behind it. Consume
+	// and report at most the committed bound, which leaves a later version ahead of the
+	// cursor the reader stores. A start above the bound is then out of range and fails.
+	if end > bound {
 		end = bound
 	}
 	if end < start {

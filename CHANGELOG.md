@@ -15,6 +15,21 @@
   nothing. A plain table and an unresolvable name are refused instead of answered with
   zero, and `/capabilities` lists the function.
 
+- **Behavior change:** an incremental read window whose `EndVersion` is ahead of the version the table
+  had reached is now consumed and reported *at* that version instead of echoing the requested number back.
+  `LatestVersion` is the cursor a consumer stores, so an echoed future version left every later write behind
+  it and dropped it permanently; a `StartVersion` ahead of that version is refused `400`/`InvalidParameter`
+  like an inverted window. What a live service answers for the same request has not been measured, so the
+  emulator does not claim a matching code.
+- `INSERT ... SELECT *` reading a delta table no longer fails with a column count mismatch: the staging
+  snapshot an INSERT takes keeps the hidden version columns out of the projection, so a copy into another
+  ACID table and an `INSERT OVERWRITE TABLE` onto itself both work, and every copied row takes its own
+  version in the target's event history.
+- The repair that brings a persisted ACID table written by an older release up to the current layout is
+  idempotent: reopening the same database file publishes the initial history exactly once, never moves the
+  version back, and leaves a write made after the restart readable from the cursor the previous start
+  reported. `TestOpenUpgradesPersistedDeltaTables` now restarts the file three times and pins all three.
+
 - **Behavior change (unified on the maintainer's 2026-11-04 decision):** every storage-face refusal of a capability the emulator does not provide now answers `405`/`MethodNotAllowed` - unknown `WriteMode`, filter-predicate pushdown, bucket / parallelism / bucket-sort split planning, an `Accept-Encoding` codec outside the advertised set, `data_format_type` / `data_format_version` outside Arrow V5, and a zero batch size. This matches the status the incremental-read refusals already used, so a consumer can tell "not provided here" (405) from "you sent something invalid" (400 `InvalidParameter`, unchanged: out-of-range row ranges and batch sizes, unknown split modes, unknown session types, unknown incremental mode, inverted version window, preview combined with an incremental read). `TestStorageRefusalContract` pins both directions. Refusals on other faces (Resources, functions, schemas, MCQA, table and instance routes) still answer `400`/`UnsupportedOperation`; extending the rule there is still an open question.
 - **Behavior change:** Storage v1 read sessions now accept `CrossPartition` instead of refusing it. The public table API (the surface the Flink/Spark connectors build on) defaults the flag to true, and every emulator read is answered with one logical split that already spans the selected partitions, so the refusal made the v1 batch and incremental paths unusable by a default-configured consumer without changing any observable result. Bucket splits, parallelism greater than one and bucket sort still fail explicitly.
 

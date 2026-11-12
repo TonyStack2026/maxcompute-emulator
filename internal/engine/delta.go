@@ -264,11 +264,11 @@ func deltaColumns(t Table) []Column {
 	return append(cols, t.Partitions...)
 }
 
-// DeltaRead returns the events a delta table published in (start, end]. A negative
-// end means "up to whatever the table has reached now", and an end above the committed
-// bound is capped to it; the returned version is the end of the window the caller
-// actually consumed, which is what readers advance to. events
-// adds the delete/update-before images, so append mode sees inserted rows only.
+// DeltaRead returns the events a delta table published in (start, end]. A negative end means
+// "up to whatever the table has reached now"; an end above the committed bound is refused, so
+// the returned version is always one the table really reached - which is what readers store as
+// their cursor. events adds the delete/update-before images, so append mode sees inserted rows
+// only.
 func (e *Engine) DeltaRead(ctx context.Context, p, s, name string, partitions []map[string]string, start, end int64, events bool) (Result, int64, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -294,13 +294,18 @@ func (e *Engine) DeltaRead(ctx context.Context, p, s, name string, partitions []
 	if end < 0 {
 		end = bound
 	}
-	// A window reaching past what is committed cannot be consumed either: the caller keeps
-	// the returned version as its cursor, so reporting the requested end would point it at
-	// versions that were never written and put everything up to the bound behind it. Consume
-	// and report at most the committed bound, which leaves a later version ahead of the
-	// cursor the reader stores. A start above the bound is then out of range and fails.
+	// A window reaching past what is committed is refused, because that is what the service
+	// does: measured on 2026-11-12 on a live ACID table at version 2, (0,2] answers its events
+	// while (0,3] and (0,1002] both fail with "The query version exceeded timetravel range".
+	// Echoing a future end back would be worse than refusing it - the caller keeps the returned
+	// version as its cursor, so any number above the bound puts every committed version up to
+	// it behind the consumer permanently. The status and error code the service answers with
+	// are not exposed through the public SDK (it surfaces as an IOException carrying only the
+	// text), so the emulator keeps this in its own invalid-value family, 400/InvalidParameter,
+	// rather than claiming a code it has not read. A start above the bound is out of range and
+	// fails the same way an inverted window does.
 	if end > bound {
-		end = bound
+		return Result{}, 0, fmt.Errorf("incremental end version %d exceeds the committed version %d", end, bound)
 	}
 	if end < start {
 		return Result{}, 0, fmt.Errorf("invalid incremental range (%d,%d]", start, end)

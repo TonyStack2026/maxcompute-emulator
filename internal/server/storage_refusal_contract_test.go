@@ -110,6 +110,13 @@ func TestStorageRefusalContract(t *testing.T) {
 				`{"IncrementalReadOptions":{"StartVersion":9,"EndVersion":3,"Mode":"append"}}`)
 			return code
 		}},
+		// A window ending above the committed version is a value the service refuses too
+		// (measured 2026-11-12), so it belongs to this family rather than to 405.
+		{"incremental end past the bound", "InvalidParameter", http.StatusBadRequest, func() int {
+			code, _, _ := openSession(t, h, v1Path("acidc", "/sessions?session_type=incremental_read"),
+				`{"IncrementalReadOptions":{"StartVersion":0,"EndVersion":100,"Mode":"append"}}`)
+			return code
+		}},
 	}
 	for _, tc := range cases {
 		if got := tc.get(); got != tc.want {

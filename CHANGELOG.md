@@ -15,12 +15,18 @@
   nothing. A plain table and an unresolvable name are refused instead of answered with
   zero, and `/capabilities` lists the function.
 
-- **Behavior change:** an incremental read window whose `EndVersion` is ahead of the version the table
-  had reached is now consumed and reported *at* that version instead of echoing the requested number back.
-  `LatestVersion` is the cursor a consumer stores, so an echoed future version left every later write behind
-  it and dropped it permanently; a `StartVersion` ahead of that version is refused `400`/`InvalidParameter`
-  like an inverted window. What a live service answers for the same request has not been measured, so the
-  emulator does not claim a matching code.
+- **Behavior change:** an incremental read window whose `EndVersion` is ahead of the version the table has
+  reached is refused with `400`/`InvalidParameter` instead of being served. `LatestVersion` is the cursor a
+  consumer stores, so handing back a number the table never reached puts every committed version up to the
+  bound behind it, permanently. A live measurement on 2026-11-12 (one project, one throwaway partitioned
+  ACID table) is what settled the form: at version 2 the service answers `(0,2]` with its two events and
+  refuses both `(0,3]` and `(0,1002]` with `The query version exceeded timetravel range`; the same request
+  first shipped in this branch capped the window to the bound, which protected the cursor but invented a
+  shape the service does not have. A `StartVersion` above the bound is refused the same way.
+- **Known divergence (measured 2026-11-12):** for an inverted window the service accepts `(2,1]` and answers
+  an empty window at version 1, while the emulator refuses it with `400`/`InvalidParameter`. The status and
+  error code the service returns for its own over-future refusal are not exposed through the public SDK, so
+  the emulator's `400`/`InvalidParameter` is its own invalid-value family, not a claimed match.
 - `INSERT ... SELECT *` reading a delta table no longer fails with a column count mismatch: the staging
   snapshot an INSERT takes keeps the hidden version columns out of the projection, so a copy into another
   ACID table and an `INSERT OVERWRITE TABLE` onto itself both work, and every copied row takes its own

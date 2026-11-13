@@ -24,9 +24,13 @@
   first shipped in this branch capped the window to the bound, which protected the cursor but invented a
   shape the service does not have. A `StartVersion` above the bound is refused the same way.
 - **Known divergence (measured 2026-11-12):** for an inverted window the service accepts `(2,1]` and answers
-  an empty window at version 1, while the emulator refuses it with `400`/`InvalidParameter`. The status and
-  error code the service returns for its own over-future refusal are not exposed through the public SDK, so
-  the emulator's `400`/`InvalidParameter` is its own invalid-value family, not a claimed match.
+  an empty window at version 1, while the emulator refuses it with `400`/`InvalidParameter`.
+- **Measured 2026-11-14, correcting what this branch said on 11-12:** the service's over-future refusal is
+  reachable after all - under the `IOException` the cause chain carries an `OdpsException` with HTTP status
+  `400` and error code `InvalidArgument`. The status this emulator returns is therefore confirmed to match. The
+  code string stays `InvalidParameter` deliberately: that is the invalid-value family across the storage face
+  (79 non-test uses; `InvalidArgument` appears nowhere here), and moving one cell onto the service's code would
+  split it. A consumer branching on the code string instead of the status will see this one difference.
 - `INSERT ... SELECT *` reading a delta table no longer fails with a column count mismatch: the staging
   snapshot an INSERT takes keeps the hidden version columns out of the projection, so a copy into another
   ACID table and an `INSERT OVERWRITE TABLE` onto itself both work, and every copied row takes its own

@@ -299,10 +299,13 @@ func (e *Engine) DeltaRead(ctx context.Context, p, s, name string, partitions []
 	// while (0,3] and (0,1002] both fail with "The query version exceeded timetravel range".
 	// Echoing a future end back would be worse than refusing it - the caller keeps the returned
 	// version as its cursor, so any number above the bound puts every committed version up to
-	// it behind the consumer permanently. The status and error code the service answers with
-	// are not exposed through the public SDK (it surfaces as an IOException carrying only the
-	// text), so the emulator keeps this in its own invalid-value family, 400/InvalidParameter,
-	// rather than claiming a code it has not read. A start above the bound is out of range and
+	// it behind the consumer permanently. What the refusal carries was read on 2026-11-14 off the
+	// same request's cause chain: an IOException over an OdpsException with HTTP status 400 and
+	// error code InvalidArgument. The status matches what this emulator returns; the code string
+	// does not, because InvalidParameter is the invalid-value family across the whole storage face
+	// (79 non-test uses) and InvalidArgument appears nowhere in this repository - moving one cell
+	// onto the service's code would split that family for a single field, so the divergence is
+	// written up in README and CHANGELOG instead. A start above the bound is out of range and
 	// fails the same way an inverted window does.
 	if end > bound {
 		return Result{}, 0, fmt.Errorf("incremental end version %d exceeds the committed version %d", end, bound)
